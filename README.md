@@ -1,6 +1,6 @@
 # jsonrepair-cpp
 
-A C++ port of the [jsonrepair](https://github.com/josdejong/jsonrepair) JavaScript library for repairing invalid JSON documents by Claude Sonnet 4.5, plus a few additional repairs capabilities.
+A C++ port of the [jsonrepair](https://github.com/josdejong/jsonrepair) JavaScript library for repairing invalid JSON documents by Claude Sonnet 4.5, plus a few additional repair capabilities.
 
 ## Features
 
@@ -107,5 +107,6 @@ std::string repaired = jsonrepair::repair(json);
 ## License
 
 See LICENSE file for details.
+
 
 
