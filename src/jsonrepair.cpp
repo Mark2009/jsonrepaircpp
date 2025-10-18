@@ -776,24 +776,29 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
     info_out.corrections.clear();
     info_out.needed_repair = false;
     
-    // Save original for comparison
-    std::string original = json_inout;
+    // Pre-process: Fix common UTF-8 encoding issues (mojibake)
+    std::string preprocessed = fixUtf8Encoding(json_inout);
+    if (preprocessed != json_inout) {
+        info_out.corrections.push_back("Fixed UTF-8 encoding issues");
+        info_out.needed_repair = true;
+    }
     
     try {
         // Perform repair
-        JSONRepairImpl impl(original);
+        JSONRepairImpl impl(preprocessed);
         std::string repaired = impl.repair();
         
         // Compare and collect diagnostics
         info_out.repaired_size = repaired.size();
-        info_out.needed_repair = (original != repaired);
+        // Update needed_repair flag (may already be true from encoding fixes)
+        info_out.needed_repair = info_out.needed_repair || (preprocessed != repaired);
         
-        if (info_out.needed_repair) {
+        if (preprocessed != repaired) {
             // Analyze differences to provide meaningful corrections
-            if (original.find('\'') != std::string::npos && repaired.find('\'') == std::string::npos) {
+            if (preprocessed.find('\'') != std::string::npos && repaired.find('\'') == std::string::npos) {
                 info_out.corrections.push_back("Converted single quotes to double quotes");
             }
-            if (original.find(",}") != std::string::npos || original.find(",]") != std::string::npos) {
+            if (preprocessed.find(",}") != std::string::npos || preprocessed.find(",]") != std::string::npos) {
                 if (repaired.find(",}") == std::string::npos && repaired.find(",]") == std::string::npos) {
                     info_out.corrections.push_back("Removed trailing commas");
                 }
@@ -801,19 +806,19 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
             // Check for unquoted keys by looking for patterns like: {name: or ,name:
             size_t pos = 0;
             bool found_unquoted = false;
-            while ((pos = original.find(':', pos)) != std::string::npos) {
+            while ((pos = preprocessed.find(':', pos)) != std::string::npos) {
                 // Look backward from colon to find key start
                 size_t key_end = pos;
-                while (key_end > 0 && (original[key_end - 1] == ' ' || original[key_end - 1] == '\t')) {
+                while (key_end > 0 && (preprocessed[key_end - 1] == ' ' || preprocessed[key_end - 1] == '\t')) {
                     key_end--;
                 }
-                if (key_end > 0 && original[key_end - 1] != '"') {
+                if (key_end > 0 && preprocessed[key_end - 1] != '"') {
                     // Check if there's a quote before this position
                     size_t check_pos = key_end - 1;
-                    while (check_pos > 0 && (std::isalnum(original[check_pos]) || original[check_pos] == '_')) {
+                    while (check_pos > 0 && (std::isalnum(preprocessed[check_pos]) || preprocessed[check_pos] == '_')) {
                         check_pos--;
                     }
-                    if (check_pos < key_end - 1 && original[check_pos] != '"') {
+                    if (check_pos < key_end - 1 && preprocessed[check_pos] != '"') {
                         found_unquoted = true;
                         break;
                     }
@@ -824,10 +829,11 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
                 info_out.corrections.push_back("Added quotes around unquoted object keys");
             }
             
-            if (info_out.repaired_size != info_out.original_size) {
-                info_out.corrections.push_back("Adjusted JSON structure");
-            }
-            if (info_out.corrections.empty()) {
+            // Only add generic message if no specific corrections were identified
+            if (info_out.corrections.size() == 1 && info_out.corrections[0] == "Fixed UTF-8 encoding issues") {
+                // UTF-8 fix was done, but JSON structure also changed
+                info_out.corrections.push_back("Applied JSON formatting corrections");
+            } else if (info_out.corrections.empty()) {
                 info_out.corrections.push_back("Applied JSON formatting corrections");
             }
         }
@@ -835,8 +841,8 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
         // Update input string with repaired version
         json_inout = std::move(repaired);
         
-    } catch (const JSONRepairError& e) {
-        // Re-throw with additional context
+    } catch (const JSONRepairError&) {
+        // Let the exception propagate
         throw;
     }
 }

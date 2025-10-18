@@ -17,7 +17,9 @@ bool isDigit(char c) {
 
 bool isValidStringCharacter(char c) {
     // Valid range is between \u{0020} and higher
-    return static_cast<unsigned char>(c) >= 0x20;
+    // Allow all high-bit characters (0x80-0xFF) which are part of UTF-8 multi-byte sequences
+    unsigned char uc = static_cast<unsigned char>(c);
+    return uc >= 0x20 || uc >= 0x80;
 }
 
 bool isDelimiter(char c) {
@@ -192,6 +194,72 @@ bool startsWithUrlSchema(const std::string& text) {
 bool isUrlChar(char c) {
     static std::string validUrlChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#@!$&'()*+;=";
     return validUrlChars.find(c) != std::string::npos;
+}
+
+std::string fixUtf8Encoding(const std::string& text) {
+    std::string result;
+    result.reserve(text.size());
+    
+    for (size_t i = 0; i < text.size(); ) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        
+        // Common Windows-1252 to UTF-8 mojibake patterns
+        // â€™ (0xC3 0xA2 0xE2 0x82 0xAC 0xE2 0x84 0xA2) -> ' (0xE2 0x80 0x99)
+        if (i + 8 < text.size() && 
+            c == 0xC3 && static_cast<unsigned char>(text[i+1]) == 0xA2 &&
+            static_cast<unsigned char>(text[i+2]) == 0xE2 && 
+            static_cast<unsigned char>(text[i+3]) == 0x82 &&
+            static_cast<unsigned char>(text[i+4]) == 0xAC &&
+            static_cast<unsigned char>(text[i+5]) == 0xE2 &&
+            static_cast<unsigned char>(text[i+6]) == 0x84 &&
+            static_cast<unsigned char>(text[i+7]) == 0xA2) {
+            // Right single quotation mark (U+2019)
+            result += "\xE2\x80\x99";
+            i += 8;
+        }
+        // â€˜ -> ' (left single quotation mark)
+        else if (i + 8 < text.size() && 
+                 c == 0xC3 && static_cast<unsigned char>(text[i+1]) == 0xA2 &&
+                 static_cast<unsigned char>(text[i+2]) == 0xE2 && 
+                 static_cast<unsigned char>(text[i+3]) == 0x82 &&
+                 static_cast<unsigned char>(text[i+4]) == 0xAC &&
+                 static_cast<unsigned char>(text[i+5]) == 0xCB &&
+                 static_cast<unsigned char>(text[i+6]) == 0x9C) {
+            // Left single quotation mark (U+2018)
+            result += "\xE2\x80\x98";
+            i += 7;
+        }
+        // â€œ -> " (left double quotation mark)
+        else if (i + 8 < text.size() && 
+                 c == 0xC3 && static_cast<unsigned char>(text[i+1]) == 0xA2 &&
+                 static_cast<unsigned char>(text[i+2]) == 0xE2 && 
+                 static_cast<unsigned char>(text[i+3]) == 0x82 &&
+                 static_cast<unsigned char>(text[i+4]) == 0xAC &&
+                 static_cast<unsigned char>(text[i+5]) == 0xC5 &&
+                 static_cast<unsigned char>(text[i+6]) == 0x93) {
+            // Left double quotation mark (U+201C)
+            result += "\xE2\x80\x9C";
+            i += 7;
+        }
+        // â€ -> " (right double quotation mark)
+        else if (i + 6 < text.size() && 
+                 c == 0xC3 && static_cast<unsigned char>(text[i+1]) == 0xA2 &&
+                 static_cast<unsigned char>(text[i+2]) == 0xE2 && 
+                 static_cast<unsigned char>(text[i+3]) == 0x82 &&
+                 static_cast<unsigned char>(text[i+4]) == 0xAC &&
+                 static_cast<unsigned char>(text[i+5]) == 0xC5) {
+            // Right double quotation mark (U+201D)
+            result += "\xE2\x80\x9D";
+            i += 6;
+        }
+        // Simple fallback: just keep the character as-is
+        else {
+            result += text[i];
+            i++;
+        }
+    }
+    
+    return result;
 }
 
 } // namespace jsonrepair

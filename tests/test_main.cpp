@@ -255,6 +255,32 @@ int main() {
          R"({"name": "John", "id": user1, "status": "active"})", 
          R"({"name": "John", "id": "user1", "status": "active"})", 
          false},
+        
+        // UTF-8 encoding tests (mojibake patterns)
+        {"UTF-8 right single quotation mark (properly encoded)",
+         "{\"name\": \"Bob\xe2\x80\x99s Tavern\"}",  // Proper UTF-8: U+2019
+         "{\"name\": \"Bob\xe2\x80\x99s Tavern\"}",
+         false},
+        
+        {"UTF-8 mojibake â€™ -> ' (right single quote)",
+         "{\"name\": \"Bob\xc3\xa2\xe2\x82\xac\xe2\x84\xa2s Tavern\"}",  // Mojibake for '
+         "{\"name\": \"Bob\xe2\x80\x99s Tavern\"}",  // Should fix to proper UTF-8
+         false},
+        
+        {"UTF-8 high-bit characters in string values",
+         "{\"text\": \"Café\"}",  // é = 0xC3 0xA9
+         "{\"text\": \"Café\"}",
+         false},
+        
+        {"UTF-8 emoji in JSON string",
+         "{\"emoji\": \"😀\"}",  // U+1F600
+         "{\"emoji\": \"😀\"}",
+         false},
+        
+        {"UTF-8 mixed ASCII and high-bit characters",
+         "{\"location\": \"Rusty Jester\xe2\x80\x99s Tavern\", \"status\": \"open\"}",
+         "{\"location\": \"Rusty Jester\xe2\x80\x99s Tavern\", \"status\": \"open\"}",
+         false},
     };
     
     std::cout << "Running " << tests.size() << " tests...\n" << std::endl;

@@ -142,4 +142,11 @@ bool startsWithUrlSchema(const std::string& text);
  */
 bool isUrlChar(char c);
 
+/**
+ * Fix common UTF-8 encoding issues (mojibake) in text
+ * Converts Windows-1252 characters that were incorrectly decoded as UTF-8
+ * back to proper UTF-8.
+ */
+std::string fixUtf8Encoding(const std::string& text);
+
 } // namespace jsonrepair
