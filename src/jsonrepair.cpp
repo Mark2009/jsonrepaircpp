@@ -2,12 +2,14 @@
 #include "string_utils.hpp"
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 
 namespace jsonrepair {
 
 class JSONRepairImpl {
 public:
-    JSONRepairImpl(const std::string& text) : text_(text), i_(0) {}
+    JSONRepairImpl(const std::string& text, std::vector<std::string>* corrections = nullptr) 
+        : text_(text), i_(0), corrections_(corrections) {}
     
     std::string repair() {
         parseMarkdownCodeBlock({"```", "[```", "{```"});
@@ -35,6 +37,7 @@ public:
         } else if (processedComma) {
             // Remove trailing comma
             output_ = stripLastOccurrence(output_, ",");
+            trackCorrection("[TRAILING_COMMA] Removed trailing comma");
         }
         
         // Remove redundant end quotes
@@ -55,6 +58,17 @@ private:
     std::string text_;
     size_t i_;
     std::string output_;
+    std::vector<std::string>* corrections_;  // Optional pointer to track corrections
+    
+    // Helper to track a correction (only if corrections_ is set)
+    void trackCorrection(const std::string& correction) {
+        if (corrections_) {
+            // Check if this correction already exists to avoid duplicates
+            if (std::find(corrections_->begin(), corrections_->end(), correction) == corrections_->end()) {
+                corrections_->push_back(correction);
+            }
+        }
+    }
     
     bool parseValue() {
         parseWhitespaceAndSkipComments();
@@ -109,6 +123,7 @@ private:
     bool parseComment() {
         // Block comment /* ... */
         if (i_ < text_.length() - 1 && text_[i_] == '/' && text_[i_ + 1] == '*') {
+            trackCorrection("[COMMENTS] Removed comments from JSON");
             while (i_ < text_.length() && !atEndOfBlockComment()) {
                 i_++;
             }
@@ -118,6 +133,7 @@ private:
         
         // Line comment // ...
         if (i_ < text_.length() - 1 && text_[i_] == '/' && text_[i_ + 1] == '/') {
+            trackCorrection("[COMMENTS] Removed comments from JSON");
             while (i_ < text_.length() && text_[i_] != '\n') {
                 i_++;
             }
@@ -135,6 +151,8 @@ private:
         size_t startOutput = output_.length();
         
         if (skipMarkdownCodeBlock(blocks)) {
+            trackCorrection("[MARKDOWN] Removed markdown code block wrapper");
+            
             if (i_ < text_.length() && isFunctionNameCharStart(text_[i_])) {
                 while (i_ < text_.length() && isFunctionNameChar(text_[i_])) {
                     i_++;
@@ -236,6 +254,7 @@ private:
                 processedComma = parseCharacter(',');
                 if (!processedComma) {
                     output_ = insertBeforeLastWhitespace(output_, ",");
+                    trackCorrection("[MISSING_COMMA] Added missing comma between object properties");
                 }
                 parseWhitespaceAndSkipComments();
             } else {
@@ -250,6 +269,7 @@ private:
                 if (i_ >= text_.length() || text_[i_] == '}' || text_[i_] == '{' || 
                     text_[i_] == ']' || text_[i_] == '[') {
                     output_ = stripLastOccurrence(output_, ",");
+                    trackCorrection("[TRAILING_COMMA] Removed trailing comma");
                 } else {
                     throwObjectKeyExpected();
                 }
@@ -263,6 +283,7 @@ private:
             if (!processedColon) {
                 if (i_ < text_.length() && (isStartOfValue(text_[i_]) || truncatedText)) {
                     output_ = insertBeforeLastWhitespace(output_, ":");
+                    trackCorrection("[MISSING_COLON] Added missing colon after object key");
                 } else {
                     throwColonExpected();
                 }
@@ -308,6 +329,7 @@ private:
                 bool processedComma = parseCharacter(',');
                 if (!processedComma) {
                     output_ = insertBeforeLastWhitespace(output_, ",");
+                    trackCorrection("[MISSING_COMMA] Added missing comma between array elements");
                 }
             } else {
                 initial = false;
@@ -318,6 +340,7 @@ private:
             bool processedValue = parseValue();
             if (!processedValue) {
                 output_ = stripLastOccurrence(output_, ",");
+                trackCorrection("[TRAILING_COMMA] Removed trailing comma");
                 break;
             }
         }
@@ -351,6 +374,7 @@ private:
         
         if (!processedValue) {
             output_ = stripLastOccurrence(output_, ",");
+            trackCorrection("[TRAILING_COMMA] Removed trailing comma");
         }
         
         output_ = "[\n" + output_ + "\n]";
@@ -372,6 +396,11 @@ private:
         char quoteChar = text_[i_];
         size_t iBefore = i_;
         size_t oBefore = output_.length();
+        
+        // Track if we're converting single quotes to double quotes
+        if (isSingleQuote(quoteChar)) {
+            trackCorrection("[SINGLE_QUOTES] Converted single quotes to double quotes");
+        }
         
         std::string str = "\"";
         i_++;
@@ -681,6 +710,7 @@ private:
             
             if (symbol == "undefined") {
                 output_ += "null";
+                trackCorrection("[UNDEFINED_TO_NULL] Converted undefined to null");
             } else {
                 // Quote the unquoted string
                 output_ += "\"";
@@ -694,6 +724,11 @@ private:
                     }
                 }
                 output_ += "\"";
+                if (isKey) {
+                    trackCorrection("[UNQUOTED_KEY] Added quotes around unquoted object key");
+                } else {
+                    trackCorrection("[UNQUOTED_VALUE] Added quotes around unquoted string value");
+                }
             }
             
             if (i_ < text_.length() && text_[i_] == '"') {
@@ -779,13 +814,13 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
     // Pre-process: Fix common UTF-8 encoding issues (mojibake)
     std::string preprocessed = fixUtf8Encoding(json_inout);
     if (preprocessed != json_inout) {
-        info_out.corrections.push_back("Fixed UTF-8 encoding issues");
+        info_out.corrections.push_back("[UTF8_ENCODING] Fixed UTF-8 encoding issues");
         info_out.needed_repair = true;
     }
     
     try {
-        // Perform repair
-        JSONRepairImpl impl(preprocessed);
+        // Perform repair with correction tracking
+        JSONRepairImpl impl(preprocessed, &info_out.corrections);
         std::string repaired = impl.repair();
         
         // Compare and collect diagnostics
@@ -793,50 +828,9 @@ void repair_with_diagnostics(std::string& json_inout, RepairInfo& info_out) {
         // Update needed_repair flag (may already be true from encoding fixes)
         info_out.needed_repair = info_out.needed_repair || (preprocessed != repaired);
         
-        if (preprocessed != repaired) {
-            // Analyze differences to provide meaningful corrections
-            if (preprocessed.find('\'') != std::string::npos && repaired.find('\'') == std::string::npos) {
-                info_out.corrections.push_back("Converted single quotes to double quotes");
-            }
-            if (preprocessed.find(",}") != std::string::npos || preprocessed.find(",]") != std::string::npos) {
-                if (repaired.find(",}") == std::string::npos && repaired.find(",]") == std::string::npos) {
-                    info_out.corrections.push_back("Removed trailing commas");
-                }
-            }
-            // Check for unquoted keys by looking for patterns like: {name: or ,name:
-            size_t pos = 0;
-            bool found_unquoted = false;
-            while ((pos = preprocessed.find(':', pos)) != std::string::npos) {
-                // Look backward from colon to find key start
-                size_t key_end = pos;
-                while (key_end > 0 && (preprocessed[key_end - 1] == ' ' || preprocessed[key_end - 1] == '\t')) {
-                    key_end--;
-                }
-                if (key_end > 0 && preprocessed[key_end - 1] != '"') {
-                    // Check if there's a quote before this position
-                    size_t check_pos = key_end - 1;
-                    while (check_pos > 0 && (std::isalnum(preprocessed[check_pos]) || preprocessed[check_pos] == '_')) {
-                        check_pos--;
-                    }
-                    if (check_pos < key_end - 1 && preprocessed[check_pos] != '"') {
-                        found_unquoted = true;
-                        break;
-                    }
-                }
-                pos++;
-            }
-            if (found_unquoted) {
-                info_out.corrections.push_back("Added quotes around unquoted object keys");
-            }
-            
-            // Only add generic message if no specific corrections were identified
-            if (info_out.corrections.size() == 1 && info_out.corrections[0] == "Fixed UTF-8 encoding issues") {
-                // UTF-8 fix was done, but JSON structure also changed
-                info_out.corrections.push_back("Applied JSON formatting corrections");
-            } else if (info_out.corrections.empty()) {
-                info_out.corrections.push_back("Applied JSON formatting corrections");
-            }
-        }
+        // Corrections are now tracked in real-time by JSONRepairImpl
+        // Note: Benign changes (whitespace normalization) don't generate corrections
+        // If string changed but no corrections were tracked, it was likely just whitespace
         
         // Update input string with repaired version
         json_inout = std::move(repaired);
